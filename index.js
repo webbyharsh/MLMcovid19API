@@ -208,7 +208,7 @@ app.get('/firestore/getToday/:number/:name/:dateMillis', async(req, res) =>{
             statusCode = 200;
         }
         let response_arr = formulateDataForDashboard(health_data);
-        let stats_obj = getStatisticalInfo(health_data);
+        let stats_obj = getStatisticalInfo(health_data, true);
         response = {
             health_data: response_arr,
             statusCode: statusCode,
@@ -228,6 +228,74 @@ app.get('/firestore/getToday/:number/:name/:dateMillis', async(req, res) =>{
     }    
 });
 
+app.get('/firestore/getStatisticalData/:currentDateMillis/:compareDateMillis/:name', async(req, res) =>{
+    let docName = req.params.name;
+    //let n = parseInt(req.params.number);
+    const dateNow = new Date();
+    const currentDate = new Date(parseFloat(req.params.currentDateMillis));
+    const currentEndDate = new Date(parseFloat(req.params.currentDateMillis) + 86400000);
+
+    const fromDate  = new Date(parseFloat(req.params.currentDateMillis));
+    const endDate = new Date(parseFloat(req.params.currentDateMillis) + 86400000);
+    let compareFromDate = 0;
+    let compareEndDate = 0;
+    let currentHealthData = [];
+    let compareHealthData = [];
+
+    if(req.params.compareDateMillis == "0"){
+        let tempDate = fromDate;
+        tempDate.setDate(tempDate.getDate()-1);
+        compareFromDate = tempDate;
+        compareEndDate = new Date(parseFloat(compareFromDate.getTime()) + 86400000);
+        //tempDate.setDate(tempDate.getDate()+1);
+    }else{
+        compareFromDate = new Date(parseFloat(req.params.compareDateMillis));
+        compareEndDate = new Date(parseFloat(req.params.compareDateMillis) + 86400000);
+    }
+    console.log(currentDate.toLocaleString());
+    console.log(compareFromDate.toLocaleString());
+    let response = {};
+    const dbRef = db.collection('covid19_health');
+    try {
+        let results = await dbRef.doc(docName).collection('health_data').where("datetime" , ">=", currentDate)
+        .where("datetime", "<=", currentEndDate)
+        .orderBy("datetime", "desc")
+        .limit(30)
+        .get();
+       // console.log(results);
+        results.forEach(doc =>{
+            let d = doc.data();
+            //console.log(d);
+            currentHealthData.push({
+                ...d
+            });
+        });
+        
+        let resultsCompare = await dbRef.doc(docName).collection('health_data').where("datetime" , ">=", compareFromDate)
+        .where("datetime", "<=", compareEndDate)
+        .orderBy("datetime", "desc")
+        .limit(30)
+        .get();
+
+        resultsCompare.forEach(doc =>{
+            let d = doc.data();
+            compareHealthData.push({
+                ...d
+            });
+        });
+
+        //console.log(currentHealthData);
+        response = getStatisticalInfo(currentHealthData, false, compareHealthData);
+
+    } catch (err) {
+        console.log(err);
+        res.send("Error " +err);
+    } finally {
+        res.send(response);
+    }
+
+});
+
 
 function formulateDataForDashboard(arr){
     arr.map((data) =>{
@@ -242,16 +310,29 @@ function formulateDataForDashboard(arr){
     return arr;
 }
 
-function getStatisticalInfo(arr){
+function getStatisticalInfo(arr, isBasic, arr2){
     let resp = {};
     let heartrate = [];
     let spo2 = [];
     let temperature = [];
+
+    //for second healthdata for calculation of corelation
+    let compare_heartrate = [];
+    let compare_spo2 = [];
+    let compare_temperature = [];
+
     arr.map((data) =>{
         heartrate.push(data.heartRate);
         spo2.push(data.spo2);
         temperature.push(data.temperature);
     });
+
+    arr2.map((data) =>{
+        compare_heartrate.push(data.heartRate);
+        compare_spo2.push(data.spo2);
+        compare_temperature.push(data.temperature);
+    });
+
     if(heartrate.length == 0 || spo2.length == 0 || temperature.length == 0){
         resp = {};
         return resp;
@@ -259,33 +340,77 @@ function getStatisticalInfo(arr){
     let hr_mean = stats.mean(heartrate);
     let hr_median = stats.median(heartrate);
     let hr_mode = stats.mode(heartrate);
+    let hr_variance = stats.variance(heartrate);
+    let hr_sd = stats.standardDeviation(heartrate);
+
 
     let sp_mean = stats.mean(spo2);
     let sp_median = stats.median(spo2);
     let sp_mode = stats.mode(spo2);
+    let sp_variance = stats.variance(spo2);
+    let sp_sd = stats.standardDeviation(spo2);
+
     
     let te_mean = stats.mean(temperature);
     let te_median = stats.median(temperature);
     let te_mode = stats.mode(temperature);
+    let te_variance = stats.variance(temperature);
+    let te_sd = stats.standardDeviation(temperature);
+
     
     resp = {
         hr:{
             hr_mean,
             hr_median,
-            hr_mode
+            hr_mode,
+            hr_variance,
+            hr_sd
         },
         sp:{
             sp_mean,
             sp_median,
-            sp_mode
+            sp_mode,
+            sp_variance,
+            sp_sd
         },
         te:{
             te_mean,
             te_median,
-            te_mode
+            te_mode,
+            te_variance,
+            te_sd
         }
     }
-    return resp;
+    if(isBasic){
+        return resp;
+    }else{
+        let hr_cover = 0;
+        let sp_cover = 0;
+        let te_cover = 0;
+        let hr_sp_corel = 0;
+        let sp_temp_corel = 0;
+        let temp_hr_corel = 0;
+        hr_sp_corel = stats.sampleCorrelation(heartrate, spo2);
+        sp_temp_corel = stats.sampleCorrelation(spo2, temperature);
+        temp_hr_corel = stats.sampleCorrelation(temperature, heartrate);
+
+
+
+        if(compare_heartrate.length != 0 && compare_spo2.length != 0 && compare_temperature.length != 0){
+            hr_cover = stats.sampleCovariance(heartrate, compare_heartrate);
+            sp_cover = stats.sampleCovariance(spo2, compare_spo2);
+            te_cover = stats.sampleCovariance(temperature, compare_temperature);
+        }
+        return {
+            ...resp,
+            hr_cover,
+            sp_cover,
+            te_cover,
+            hr_sp_corel,
+            sp_temp_corel,
+            temp_hr_corel
+        }
+    }
 }
 
 
