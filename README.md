@@ -10,3 +10,7 @@ API reference
 (GET) /firestore/getLast/:number/:name Get the last :number entries from the databse for doc :name
 
 (GET) /firestore/getToday/:number/:name/:dateMillis Get all data of that particular day with statistical info
+
+NOTE: All date millis are time at the start of the day i.e at 12 am
+
+(GET) /firestore/getStatisticalData/:currentDateMillis/:compareDateMillis/:name Get statistical data for that day with corelation and covariance
